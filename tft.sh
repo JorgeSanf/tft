@@ -1,82 +1,73 @@
 #!/bin/bash
 
-# Function to check and locate the correct config.txt file
-locate_config_file() {
-    if [ -f /boot/config.txt ]; then
-        CONFIG_FILE="/boot/config.txt"
-    elif [ -f /boot/firmware/config.txt ]; then
-        CONFIG_FILE="/boot/firmware/config.txt"
-    else
-        echo "Error: Could not locate config.txt"
-        exit 1
-    fi
-    echo "Using config file at: $CONFIG_FILE"
-}
+# Backup current configuration
+sudo ./system_backup.sh
 
-# Redirect output to a log file
-exec > >(tee -i /var/log/lcd_setup.log)
-exec 2>&1
+# Clean up any existing libinput configuration
+if [ -f /etc/X11/xorg.conf.d/40-libinput.conf ]; then
+    sudo rm -rf /etc/X11/xorg.conf.d/40-libinput.conf
+fi
 
-# Locate config.txt
-locate_config_file
+# Ensure the xorg.conf.d directory exists
+if [ ! -d /etc/X11/xorg.conf.d ]; then
+    sudo mkdir -p /etc/X11/xorg.conf.d
+fi
 
-# Update and install necessary packages
-sudo apt-get update
-sudo apt-get install cmake libraspberrypi-dev xserver-xorg-input-evdev -y
-
-# Copy the necessary overlay for the LCD to the correct location
+# Copy the TFT overlay files
 sudo cp ./usr/tft9341-overlay.dtb /boot/overlays/
 sudo cp ./usr/tft9341-overlay.dtb /boot/overlays/tft9341.dtbo
 
-# Backup and modify the config file
-sudo cp "$CONFIG_FILE" "${CONFIG_FILE}.bak" # Backup current config.txt
+# Set up the configuration for TFT
+sudo touch /boot/config.txt.bak
+{
+    echo "hdmi_force_hotplug=1"
+    echo "dtparam=i2c_arm=on"
+    echo "dtparam=spi=on"
+    echo "enable_uart=1"
+    echo "dtoverlay=tft9341:rotate=90"
+    echo "hdmi_group=2"
+    echo "hdmi_mode=1"
+    echo "hdmi_mode=87"
+    echo "hdmi_cvt 480 360 60 6 0 0 0"
+    echo "hdmi_drive=2"
+} | sudo tee -a /boot/config.txt.bak > /dev/null
 
-# Disable vc4-kms-v3d overlay if it exists
-sudo sed -i '/dtoverlay=vc4-kms-v3d/d' "$CONFIG_FILE"
+sudo cp -rf /boot/config.txt.bak /boot/config.txt
 
-# Add necessary settings to config.txt
-sudo sed -i '/hdmi_force_hotplug/d' "$CONFIG_FILE"
-sudo sed -i '/dtoverlay=tft9341/d' "$CONFIG_FILE"
+# Copy calibration configuration
+sudo cp -rf ./usr/99-calibration.conf-32-90 /etc/X11/xorg.conf.d/99-calibration.conf
 
-sudo bash -c "cat <<EOL >> $CONFIG_FILE
-hdmi_force_hotplug=1
-dtparam=i2c_arm=on
-dtparam=spi=on
-enable_uart=1
-dtoverlay=tft9341:rotate=90
-hdmi_group=2
-hdmi_mode=87
-hdmi_cvt 480 360 60 6 0 0 0
-hdmi_drive=2
-EOL"
-
-# Copy calibration file for touchscreen if needed
-sudo cp ./usr/99-calibration.conf /etc/X11/xorg.conf.d/99-calibration.conf
-
-# Install framebuffer copy (fbcp) if not already installed
-if ! command -v fbcp &> /dev/null; then
-    echo "fbcp not found, installing..."
-    wget --spider -q https://github.com
-    if [ $? -ne 0 ]; then
-        echo "No internet connection, skipping fbcp installation"
-    else
+# Update and install necessary packages
+sudo apt-get update
+if wget --spider -q -o /dev/null --tries=1 -T 10 https://cmake.org/; then
+    sudo apt-get install cmake libraspberrypi-dev -y
+    if type cmake > /dev/null 2>&1; then
+        # Install fbcp
         sudo git clone https://github.com/tasanakorn/rpi-fbcp
-        cd rpi-fbcp/
+        cd rpi-fbcp || exit
         mkdir build
-        cd build
-        cmake ..
-        make
+        cd build || exit
+        sudo cmake ..
+        sudo make
         sudo install fbcp /usr/local/bin/fbcp
-        cd ../..
+        cd - > /dev/null
+    else
+        echo "cmake installation failed."
     fi
+else
+    echo "Network error, can't install cmake."
 fi
 
-# Enable fbcp on boot by adding it to /etc/rc.local
-if ! grep -q "fbcp" /etc/rc.local; then
-    sudo sed -i '$i /usr/local/bin/fbcp &' /etc/rc.local
+# Install evdev input driver
+if ! dpkg -l | grep -q xserver-xorg-input-evdev; then
+    sudo apt-get install xserver-xorg-input-evdev -y
 fi
+
+# Copy evdev configuration
+sudo cp -rf /usr/share/X11/xorg.conf.d/10-evdev.conf /usr/share/X11/xorg.conf.d/45-evdev.conf
 
 # Sync and reboot
 sudo sync
+sleep 1
 echo "Rebooting now..."
 sudo reboot
