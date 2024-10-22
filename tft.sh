@@ -129,12 +129,10 @@ fi
 #echo "this is not raspberrypi kernel, no need to update touch configure, reboot"
 #fi
 
-sudo rm /usr/share/X11/xorg.conf.d/20-noglamor.conf
-sudo sed -e '/dtoverlay=vc4/ s/^#*/#/' -i /boot/firmware/config.txt
-sudo sed -i -e '/greeter-session=/ s/=.*/=pi-greeter/' /etc/lightdm/lightdm.conf
-sudo sed -i -e '/user-session=/ s/=.*/=LXDE-pi-x/' /etc/lightdm/lightdm.conf
-sudo sed -i -e '/autologin-session=/ s/=.*/=LXDE-pi-x/' /etc/lightdm/lightdm.conf
 sudo systemctl disable glamor-test.service
+sudo cat /usr/share/X11/xorg.conf.d/20-noglamor.conf | sed -e '/EndSection/i Driver "fbdev"' > /usr/share/X11/xorg.conf.d/21-noglamor.conf
+sudo rm /usr/share/X11/xorg.conf.d/20-noglamor.conf
+sudo systemctl restart lightdm
 
 sudo sync
 sudo sync
